@@ -1,10 +1,4 @@
 python-telegram-bot
 google-api-python-client
 psycopg2-binary
-requestspython-telegram-bot
-google-api-python-client
-psycopg2-binary
-requestspython-telegram-bot
-google-api-python-client
-psycopg2-binary
 requests
