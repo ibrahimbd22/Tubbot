@@ -7,30 +7,35 @@ import psycopg2
 from datetime import datetime, timedelta
 
 # ==========================================
-# ЁЯСЗ ржЖржкржирж╛рж░ рждржерзНржпржЧрзБрж▓рзЛ ржПржЦрж╛ржирзЗ ржмрж╕рж╛ржи (рж╕рж╛ржмржзрж╛ржирзЗ) ЁЯСЗ
+# 👇 আপনার দেওয়া তথ্যগুলো বসানো হয়েছে 👇
 # ==========================================
 
 BOT_TOKEN = "8558760249:AAGETUnIesTK15Gd3AajClakNd7ZQ72fDRU"
-ADMIN_ID = 5788504224  # ржЖржкржирж╛рж░ ржЯрзЗрж▓рж┐ржЧрзНрж░рж╛ржо ржЖржЗржбрж┐ (рж╕ржВржЦрзНржпрж╛)
+ADMIN_ID = 5788504224
 YOUTUBE_API_KEY = "AIzaSyCm-_pm6_XPQ6DN7v3GAf6dozFXuOyv0ek"
-DB_URI = "postgresql://postgres:01836204769@db.uqyphcmwfwwgxkwcfvhr.supabase.co:5432/postgres" # postgresql://...
-BKASH_NUMBER = "01881251107" # ржЖржкржирж╛рж░ ржмрж┐ржХрж╛рж╢ ржирж╛ржорзНржмрж╛рж░
+DB_URI = "postgresql://postgres.uqyphcmwfwwgxkwcfvhr:TubeBotPass2025@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+BKASH_NUMBER = "017XXXXXXXX"  # এখানে পরে আপনার বিকাশ নাম্বার বসিয়ে দিয়েন
 
 # ==========================================
 
-# рж▓ржЧрж┐ржВ рж╕рзЗржЯржЖржк
+# লগিং সেটআপ
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# ржбрж╛ржЯрж╛ржмрзЗрж╕ ржХрж╛ржирзЗржХрж╢ржи ржлрж╛ржВрж╢ржи
+# ডাটাবেস কানেকশন ফাংশন
 def get_db_connection():
-    return psycopg2.connect(DB_URI)
+    try:
+        conn = psycopg2.connect(DB_URI)
+        return conn
+    except Exception as e:
+        print(f"Database Connection Error: {e}")
+        return None
 
-# --- ржЗржЙржЯрж┐ржЙржм рж╣рзЗрж▓рзНржкрж╛рж░ ржлрж╛ржВрж╢ржи ---
+# --- ইউটিউব হেল্পার ফাংশন ---
 def check_youtube_sub(user_channel_id, target_channel_id):
-    """ржЪрзЗржХ ржХрж░рзЗ ржЗржЙржЬрж╛рж░ рж╕рждрзНржпрж┐ рж╕рж╛ржмрж╕рзНржХрзНрж░рж╛ржЗржм ржХрж░рзЗржЫрзЗ ржХрж┐ ржирж╛"""
+    """চেক করে ইউজার সত্যি সাবস্ক্রাইব করেছে কি না"""
     try:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
         request = youtube.subscriptions().list(
@@ -44,14 +49,14 @@ def check_youtube_sub(user_channel_id, target_channel_id):
         print(f"YT API Error: {e}")
         return False
 
-# --- ржХржорж╛ржирзНржб рж╣рзНржпрж╛ржирзНржбрж▓рж╛рж░ ---
+# --- কমান্ড হ্যান্ডলার ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
     referrer_id = None
     
-    # рж░рзЗржлрж╛рж░рзЗрж▓ рж╣рзНржпрж╛ржирзНржбрж▓рж┐ржВ
+    # রেফারেল হ্যান্ডলিং
     if args:
         try:
             referrer_id = int(args[0])
@@ -60,21 +65,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     conn = get_db_connection()
+    if not conn:
+        await update.message.reply_text("⚠️ সার্ভার মেইনটেনেন্সে আছে। কিছুক্ষণ পর চেষ্টা করুন।")
+        return
+
     cur = conn.cursor()
     
-    # ржЗржЙржЬрж╛рж░ ржЖржЫрзЗ ржХрж┐ ржирж╛ ржЪрзЗржХ
+    # ইউজার আছে কি না চেক
     cur.execute("SELECT * FROM users WHERE user_id = %s", (user.id,))
     existing_user = cur.fetchone()
     
     if existing_user:
         await show_menu(update, context)
     else:
-        # ржирждрзБржи ржЗржЙржЬрж╛рж░ рж╣рж▓рзЗ ржЪрзНржпрж╛ржирзЗрж▓ ржЖржЗржбрж┐ ржЪрж╛ржЗржмрзЗ
+        # নতুন ইউজার হলে চ্যানেল আইডি চাইবে
         await update.message.reply_text(
-            f"ЁЯСЛ рж╕рзНржмрж╛ржЧрждржо {user.first_name}!\n\n"
-            "ржЖржорж╛ржжрзЗрж░ ржХржорж┐ржЙржирж┐ржЯрж┐рждрзЗ ржЬрзЯрзЗржи ржХрж░рждрзЗ ржЖржкржирж╛рж░ **YouTube Channel ID** ржЯрж┐ ржжрж┐ржиред\n"
-            "ржЙржжрж╛рж╣рж░ржг: `UCxxxxxxxxxxxxxxx`\n\n"
-            "(ржЪрзНржпрж╛ржирзЗрж▓ рж▓рж┐ржВржХ ржжрж┐рж▓рзЗржУ рж╣ржмрзЗ, рждржмрзЗ ржЖржЗржбрж┐ ржжрж┐рж▓рзЗ ржнрж╛рж▓рзЛ рж╣рзЯ)"
+            f"👋 স্বাগতম {user.first_name}!\n\n"
+            "আমাদের কমিউনিটিতে জয়েন করতে আপনার **YouTube Channel ID** টি দিন।\n"
+            "উদাহরণ: `UCxxxxxxxxxxxxxxx`\n\n"
+            "(আপনার চ্যানেলে গিয়ে About সেকশন থেকে Share > Copy Link করে এখানে দিন)"
         )
         context.user_data['waiting_for_channel'] = True
         if referrer_id:
@@ -84,50 +93,53 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ржЪрзНржпрж╛ржирзЗрж▓ ржЖржЗржбрж┐ ржЗржиржкрзБржЯ ржирзЗржУрзЯрж╛
+    # চ্যানেল আইডি ইনপুট নেওয়া
     if context.user_data.get('waiting_for_channel'):
         channel_text = update.message.text.strip()
         
-        # ржЪрзНржпрж╛ржирзЗрж▓ ржЖржЗржбрж┐ ржмрзЗрж░ ржХрж░рж╛ (рж╕рж┐ржорзНржкрж▓ рж▓ржЬрж┐ржХ)
+        # চ্যানেল আইডি বের করা (সিম্পল লজিক)
+        channel_id = channel_text
         if "channel/" in channel_text:
-            channel_id = channel_text.split("channel/")[-1].split("/")[0]
-        else:
-            channel_id = channel_text
+            try:
+                channel_id = channel_text.split("channel/")[-1].split("/")[0].split("?")[0]
+            except:
+                channel_id = channel_text
 
         user = update.effective_user
         referrer_id = context.user_data.get('referrer_id')
         
         conn = get_db_connection()
+        if not conn: return
         cur = conn.cursor()
         
         try:
-            # 1. рж╕рж┐рж╕рзНржЯрзЗржо ржкрзБрж▓ ржерзЗржХрзЗ рзнрзл ржкрзЯрзЗржирзНржЯ ржХржорж╛ржирзЛ
+            # 1. সিস্টেম পুল থেকে ৭৫ পয়েন্ট কমানো
             cur.execute("UPDATE system_pool SET total_balance = total_balance - 75 WHERE id = 1")
             
-            # 2. ржЗржЙржЬрж╛рж░ рждрзИрж░рж┐ ржХрж░рж╛
+            # 2. ইউজার তৈরি করা
             cur.execute(
                 "INSERT INTO users (user_id, username, channel_id, balance, referrer_id) VALUES (%s, %s, %s, %s, %s)",
                 (user.id, user.username, channel_id, 75, referrer_id)
             )
             
-            # 3. рж░рзЗржлрж╛рж░рж╛рж░ ржмрзЛржирж╛рж╕ (ржпржжрж┐ ржерж╛ржХрзЗ)
+            # 3. রেফারার বোনাস (যদি থাকে)
             if referrer_id:
                 cur.execute("UPDATE users SET balance = balance + 75 WHERE user_id = %s", (referrer_id,))
                 cur.execute("UPDATE system_pool SET total_balance = total_balance - 75 WHERE id = 1")
                 try:
-                    await context.bot.send_message(referrer_id, "ЁЯОЙ ржЖржкржирж┐ ржПржХржЬржиржХрзЗ рж░рзЗржлрж╛рж░ ржХрж░рзЗ рзнрзл ржкрзЯрзЗржирзНржЯ ржкрзЗрзЯрзЗржЫрзЗржи!")
+                    await context.bot.send_message(referrer_id, "🎉 আপনি একজনকে রেফার করে ৭৫ পয়েন্ট পেয়েছেন!")
                 except:
                     pass
 
             conn.commit()
             await update.message.reply_text(
-                "тЬЕ рж░рзЗржЬрж┐рж╕рзНржЯрзНрж░рзЗрж╢ржи рж╕ржлрж▓! ржЖржкржирж┐ рзнрзл ржкрзЯрзЗржирзНржЯ ржмрзЛржирж╛рж╕ ржкрзЗрзЯрзЗржЫрзЗржиред",
+                "✅ রেজিস্ট্রেশন সফল! আপনি ৭৫ পয়েন্ট বোনাস পেয়েছেন।",
             )
             await show_menu(update, context)
             
         except Exception as e:
             conn.rollback()
-            await update.message.reply_text("тЪая╕П рж╕ржорж╕рзНржпрж╛ рж╣рзЯрзЗржЫрзЗ ржмрж╛ ржПржЗ ржЪрзНржпрж╛ржирзЗрж▓ ржЗрждрж┐ржоржзрзНржпрзЗ ржирж┐ржмржирзНржзрж┐рждред")
+            await update.message.reply_text("⚠️ সমস্যা হয়েছে বা এই চ্যানেল/ইউজার ইতিমধ্যে নিবন্ধিত।")
             print(e)
         finally:
             cur.close()
@@ -138,20 +150,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("ЁЯТ░ Earn Points (ржХрж╛ржЬ ржХрж░рзБржи)", callback_data='earn')],
-        [InlineKeyboardButton("ЁЯСд My Profile", callback_data='profile'),
-         InlineKeyboardButton("ЁЯТ│ Buy Points", callback_data='buy')],
-        [InlineKeyboardButton("ЁЯФЧ Refer & Earn", callback_data='refer')]
+        [InlineKeyboardButton("💰 Earn Points (কাজ করুন)", callback_data='earn')],
+        [InlineKeyboardButton("👤 My Profile", callback_data='profile'),
+         InlineKeyboardButton("💳 Buy Points", callback_data='buy')],
+        [InlineKeyboardButton("🔗 Refer & Earn", callback_data='refer')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    msg_text = "ЁЯПа **Main Menu**\nржЖржкржирж╛рж░ ржЕржкрж╢ржи ржмрзЗржЫрзЗ ржирж┐ржи:"
+    msg_text = "🏠 **Main Menu**\nআপনার অপশন বেছে নিন:"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(msg_text, reply_markup=reply_markup, parse_mode='Markdown')
     else:
         await update.message.reply_text(msg_text, reply_markup=reply_markup, parse_mode='Markdown')
 
-# --- ржмрж╛ржЯржи рж╣рзНржпрж╛ржирзНржбрж▓рж╛рж░ (рж╕ржм ржЕрзНржпрж╛ржХрж╢ржи ржПржЦрж╛ржирзЗ) ---
+# --- বাটন হ্যান্ডলার (সব অ্যাকশন এখানে) ---
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -160,6 +172,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     
     conn = get_db_connection()
+    if not conn:
+        await query.message.reply_text("Database Error")
+        return
     cur = conn.cursor()
 
     if data == 'profile':
@@ -167,12 +182,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = cur.fetchone()
         if res:
             text = (
-                f"ЁЯСд **ржЖржкржирж╛рж░ ржкрзНрж░рзЛржлрж╛ржЗрж▓**\n\n"
-                f"ЁЯТ░ ржмрзНржпрж╛рж▓рзЗржирзНрж╕: **{res[0]}** ржкрзЯрзЗржирзНржЯ\n"
-                f"ЁЯУ║ ржЪрзНржпрж╛ржирзЗрж▓ ржЖржЗржбрж┐: `{res[1]}`\n"
-                f"тЪая╕П ржУрзЯрж╛рж░рзНржирж┐ржВ: {res[2]}/3\n"
+                f"👤 **আপনার প্রোফাইল**\n\n"
+                f"💰 ব্যালেন্স: **{res[0]}** পয়েন্ট\n"
+                f"📺 চ্যানেল আইডি: `{res[1]}`\n"
+                f"⚠️ ওয়ার্নিং: {res[2]}/3\n"
             )
-            back_btn = [[InlineKeyboardButton("ЁЯФЩ Back", callback_data='menu')]]
+            back_btn = [[InlineKeyboardButton("🔙 Back", callback_data='menu')]]
             await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == 'menu':
@@ -181,30 +196,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'refer':
         link = f"https://t.me/{context.bot.username}?start={user.id}"
         text = (
-            "ЁЯдЭ **рж░рзЗржлрж╛рж░рзЗрж▓ ржкрзНрж░рзЛржЧрзНрж░рж╛ржо**\n\n"
-            "ржмржирзНржзрзБржжрзЗрж░ ржЗржиржнрж╛ржЗржЯ ржХрж░рзБржи ржПржмржВ ржжрзБржЬржирзЗржЗ ржЬрж┐рждрзБржи!\n"
-            "ЁЯОБ ржЖржкржирж┐ ржкрж╛ржмрзЗржи: **рзнрзл ржкрзЯрзЗржирзНржЯ**\n"
-            "ЁЯОБ ржмржирзНржзрзБ ржкрж╛ржмрзЗ: **рзнрзл ржкрзЯрзЗржирзНржЯ**\n\n"
-            f"ржЖржкржирж╛рж░ рж▓рж┐ржВржХ:\n`{link}`"
+            "🤝 **রেফারেল প্রোগ্রাম**\n\n"
+            "বন্ধুদের ইনভাইট করুন এবং দুজনেই জিতুন!\n"
+            "🎁 আপনি পাবেন: **৭৫ পয়েন্ট**\n"
+            "🎁 বন্ধু পাবে: **৭৫ পয়েন্ট**\n\n"
+            f"আপনার লিংক:\n`{link}`"
         )
-        back_btn = [[InlineKeyboardButton("ЁЯФЩ Back", callback_data='menu')]]
+        back_btn = [[InlineKeyboardButton("🔙 Back", callback_data='menu')]]
         await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == 'buy':
         text = (
-            "ЁЯТО **ржкрзЯрзЗржирзНржЯ ржХрж┐ржирзБржи (рзз ржЯрж╛ржХрж╛ = рзй ржкрзЯрзЗржирзНржЯ)**\n\n"
-            "тАв Starter: рззрзжрзж ржЯрж╛ржХрж╛рзЯ рзйрзлрзж ржкрзЯрзЗржирзНржЯ\n"
-            "тАв Pro: рзлрзжрзж ржЯрж╛ржХрж╛рзЯ рзирзжрзжрзж ржкрзЯрзЗржирзНржЯ\n"
-            "тАв VIP: рззрзжрзжрзж ржЯрж╛ржХрж╛рзЯ рзкрзлрзжрзж ржкрзЯрзЗржирзНржЯ\n\n"
-            f"ржмрж┐ржХрж╛рж╢ (Send Money): `{BKASH_NUMBER}`\n\n"
-            "ржЯрж╛ржХрж╛ ржкрж╛ржарж┐рзЯрзЗ ржЕрзНржпрж╛ржбржорж┐ржиржХрзЗ рж╕рзНржХрзНрж░рж┐ржирж╢ржЯ ржмрж╛ TrxID ржжрж┐ржиред"
+            "💎 **পয়েন্ট কিনুন (১ টাকা = ৩ পয়েন্ট)**\n\n"
+            "• Starter: ১০০ টাকায় ৩৫০ পয়েন্ট\n"
+            "• Pro: ৫০০ টাকায় ২০০০ পয়েন্ট\n"
+            "• VIP: ১০০০ টাকায় ৪৫০০ পয়েন্ট\n\n"
+            f"বিকাশ (Send Money): `{BKASH_NUMBER}`\n\n"
+            "টাকা পাঠিয়ে অ্যাডমিনকে স্ক্রিনশট বা TrxID দিন।"
         )
-        back_btn = [[InlineKeyboardButton("ЁЯФЩ Back", callback_data='menu')]]
+        back_btn = [[InlineKeyboardButton("🔙 Back", callback_data='menu')]]
         await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif data == 'earn':
-        # ржЯрж╛рж╕рзНржХ ржЦрзЛржБржЬрж╛: ржПржоржи ржЗржЙржЬрж╛рж░ ржпрж╛рж░ ржмрзНржпрж╛рж▓рзЗржирзНрж╕ рззрзл+ ржПржмржВ ржЖржорж┐ рждрж╛ржХрзЗ рж╕рж╛ржмрж╕рзНржХрзНрж░рж╛ржЗржм ржХрж░рж┐ржирж┐
-        # (ржПржЦрж╛ржирзЗ рж╕рж┐ржорзНржкрж▓ рж▓ржЬрж┐ржХ ржмрзНржпржмрж╣рж╛рж░ ржХрж░рж╛ рж╣рзЯрзЗржЫрзЗ, ржкрзНрж░рзЛржбрж╛ржХрж╢ржирзЗ ржЖрж░ржУ ржЕрзНржпрж╛ржбржнрж╛ржирзНрж╕ржб ржХрзБрзЯрзЗрж░рж┐ рж▓рж╛ржЧржмрзЗ)
+        # টাস্ক খোঁজা: এমন ইউজার যার ব্যালেন্স ১৫+ এবং আমি তাকে সাবস্ক্রাইব করিনি
         cur.execute(
             """
             SELECT user_id, channel_id FROM users 
@@ -221,18 +235,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['task_target_cid'] = target_cid
             
             kb = [
-                [InlineKeyboardButton("ЁЯУ║ Subscribe Channel", url=f"https://www.youtube.com/channel/{target_cid}")],
-                [InlineKeyboardButton("тЬЕ Verify Task", callback_data='verify_task')],
-                [InlineKeyboardButton("ЁЯФЩ Back", callback_data='menu')]
+                [InlineKeyboardButton("📺 Subscribe Channel", url=f"https://www.youtube.com/channel/{target_cid}")],
+                [InlineKeyboardButton("✅ Verify Task", callback_data='verify_task')],
+                [InlineKeyboardButton("🔙 Back", callback_data='menu')]
             ]
             await query.edit_message_text(
-                f"ЁЯСЗ ржПржЗ ржЪрзНржпрж╛ржирзЗрж▓ржЯрж┐ рж╕рж╛ржмрж╕рзНржХрзНрж░рж╛ржЗржм ржХрж░рзБржи ржПржмржВ рззрзж ржкрзЯрзЗржирзНржЯ ржЬрж┐рждрзБржи!\nID: `{target_cid}`",
+                f"👇 এই চ্যানেলটি সাবস্ক্রাইব করুন এবং ১০ পয়েন্ট জিতুন!\nID: `{target_cid}`",
                 reply_markup=InlineKeyboardMarkup(kb),
                 parse_mode='Markdown'
             )
         else:
-            await query.edit_message_text("тЭМ ржмрж░рзНрждржорж╛ржирзЗ ржХрзЛржирзЛ ржХрж╛ржЬ ржирзЗржЗред ржХрж┐ржЫрзБржХрзНрж╖ржг ржкрж░ ржЪрзЗрж╖рзНржЯрж╛ ржХрж░рзБржиред", 
-                                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("ЁЯФЩ Back", callback_data='menu')]]))
+            await query.edit_message_text("❌ বর্তমানে কোনো কাজ নেই। কিছুক্ষণ পর চেষ্টা করুন।", 
+                                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data='menu')]]))
 
     elif data == 'verify_task':
         target_uid = context.user_data.get('task_target_uid')
@@ -240,32 +254,42 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if not target_cid:
             await query.edit_message_text("Error. Try again.")
+            cur.close()
+            conn.close()
             return
 
-        # ржЖржорж╛рж░ ржЪрзНржпрж╛ржирзЗрж▓ ржЖржЗржбрж┐ ржмрзЗрж░ ржХрж░рж╛
+        # আমার চ্যানেল আইডি বের করা
         cur.execute("SELECT channel_id FROM users WHERE user_id = %s", (user.id,))
-        my_cid = cur.fetchone()[0]
+        res = cur.fetchone()
+        
+        if not res:
+            await query.edit_message_text("User not found.")
+            cur.close()
+            conn.close()
+            return
+            
+        my_cid = res[0]
 
-        # API ржХрж▓ ржХрж░рзЗ ржЪрзЗржХ ржХрж░рж╛
+        # API কল করে চেক করা
         is_subscribed = check_youtube_sub(my_cid, target_cid)
 
         if is_subscribed:
             try:
-                # рзз. ржЪрзНржпрж╛ржирзЗрж▓ ржорж╛рж▓рж┐ржХрзЗрж░ ржерзЗржХрзЗ рззрзл ржХрж╛ржЯрж╛
+                # ১. চ্যানেল মালিকের থেকে ১৫ কাটা
                 cur.execute("UPDATE users SET balance = balance - 15 WHERE user_id = %s", (target_uid,))
-                # рзи. ржЖрж░рзНржирж╛рж░ржХрзЗ рззрзж ржжрзЗржУрзЯрж╛
+                # ২. আর্নারকে ১০ দেওয়া
                 cur.execute("UPDATE users SET balance = balance + 10 WHERE user_id = %s", (user.id,))
-                # рзй. рж╕рж┐рж╕рзНржЯрзЗржорзЗ рзл ржлрзЗрж░ржд (Recycle)
+                # ৩. সিস্টেমে ৫ ফেরত (Recycle)
                 cur.execute("UPDATE system_pool SET total_balance = total_balance + 5 WHERE id = 1")
                 
-                # рзк. рж╕рж╛ржмрж╕рзНржХрзНрж░рж┐ржкрж╢ржи рж░рзЗржХрж░рзНржб рж╕рзЗржн (ржмрж┐ржЪрж╛рж░рзЗрж░ ржЬржирзНржп)
+                # ৪. সাবস্ক্রিপশন রেকর্ড সেভ (বিচারের জন্য)
                 cur.execute(
                     "INSERT INTO subscriptions (subscriber_id, target_channel_id, target_user_id) VALUES (%s, %s, %s)",
                     (user.id, target_cid, target_uid)
                 )
                 
                 conn.commit()
-                await query.edit_message_text("тЬЕ ржЕржнрж┐ржиржирзНржжржи! ржЯрж╛рж╕рзНржХ ржХржоржкрзНрж▓рж┐ржЯред рззрзж ржкрзЯрзЗржирзНржЯ ржпрзЛржЧ рж╣рзЯрзЗржЫрзЗред", 
+                await query.edit_message_text("✅ অভিনন্দন! টাস্ক কমপ্লিট। ১০ পয়েন্ট যোগ হয়েছে।", 
                                               reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("More Task", callback_data='earn')]]))
             except Exception as e:
                 conn.rollback()
@@ -273,45 +297,46 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("Error processing points.")
         else:
             await query.edit_message_text(
-                "тЭМ рж╕рж╛ржмрж╕рзНржХрзНрж░рж┐ржкрж╢ржи ржкрж╛ржУрзЯрж╛ ржпрж╛рзЯржирж┐ред\n"
-                "ржжрзЯрж╛ ржХрж░рзЗ ржирж┐рж╢рзНржЪрж┐ржд ржХрж░рзБржи ржЖржкржирж┐ рж╕рж╛ржмрж╕рзНржХрзНрж░рж╛ржЗржм ржХрж░рзЗржЫрзЗржи ржПржмржВ ржЖржкржирж╛рж░ 'Subscriptions' ржкрзНрж░рж╛ржЗржнрзЗрж╕рж┐ 'Public' ржХрж░рж╛ ржЖржЫрзЗред",
+                "❌ সাবস্ক্রিপশন পাওয়া যায়নি।\n"
+                "দয়া করে নিশ্চিত করুন আপনি সাবস্ক্রাইব করেছেন এবং আপনার 'Subscriptions' প্রাইভেসি 'Public' করা আছে।",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Try Again", callback_data='earn')]])
             )
 
     cur.close()
     conn.close()
 
-# --- ржПржбржорж┐ржи ржХржорж╛ржирзНржб (ржкрзЯрзЗржирзНржЯ ржжрзЗржУрзЯрж╛рж░ ржЬржирзНржп) ---
+# --- এডমিন কমান্ড (পয়েন্ট দেওয়ার জন্য) ---
 async def admin_add_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != ADMIN_ID: return
 
     try:
-        # ржмрзНржпржмрж╣рж╛рж░: /add user_id amount
+        # ব্যবহার: /add user_id amount
         target_id = int(context.args[0])
         amount = int(context.args[1])
         
         conn = get_db_connection()
+        if not conn: return
         cur = conn.cursor()
         
-        # рж╕рж┐рж╕рзНржЯрзЗржо ржкрзБрж▓ ржерзЗржХрзЗ ржкрзЯрзЗржирзНржЯ ржирж┐рзЯрзЗ ржЗржЙржЬрж╛рж░ржХрзЗ ржжрзЗржУрзЯрж╛
+        # সিস্টেম পুল থেকে পয়েন্ট নিয়ে ইউজারকে দেওয়া
         cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amount, target_id))
         cur.execute("UPDATE system_pool SET total_balance = total_balance - %s WHERE id = 1", (amount,))
         conn.commit()
         conn.close()
         
-        await update.message.reply_text(f"тЬЕ рж╕ржлрж▓! {target_id}-ржХрзЗ {amount} ржкрзЯрзЗржирзНржЯ ржжрзЗржУрзЯрж╛ рж╣рзЯрзЗржЫрзЗред")
-        await context.bot.send_message(target_id, f"ЁЯОЙ ржЕржнрж┐ржиржирзНржжржи! ржЕрзНржпрж╛ржбржорж┐ржи ржЖржкржирж╛ржХрзЗ {amount} ржкрзЯрзЗржирзНржЯ ржкрж╛ржарж┐рзЯрзЗржЫрзЗред")
+        await update.message.reply_text(f"✅ সফল! {target_id}-কে {amount} পয়েন্ট দেওয়া হয়েছে।")
+        await context.bot.send_message(target_id, f"🎉 অভিনন্দন! অ্যাডমিন আপনাকে {amount} পয়েন্ট পাঠিয়েছে।")
         
     except Exception as e:
-        await update.message.reply_text("ржмрзНржпржмрж╣рж╛рж░: /add <user_id> <amount>")
+        await update.message.reply_text("ব্যবহার: /add <user_id> <amount>")
 
-# --- рж░рж╛ржи ржмржбрж┐ ---
+# --- রান বডি ---
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", admin_add_points)) # рж╢рзБржзрзБ ржПржбржорж┐ржирзЗрж░ ржЬржирзНржп
+    app.add_handler(CommandHandler("add", admin_add_points)) 
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     app.add_handler(CallbackQueryHandler(button_callback))
     
