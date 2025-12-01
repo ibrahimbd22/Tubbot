@@ -9,11 +9,30 @@ from googleapiclient.discovery import build
 import psycopg2
 import requests
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
+
+# ==========================================
+# 👇 RENDER PORT FIX (DUMMY SERVER) 👇
+# ==========================================
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I am alive! Bot is running..."
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+# ==========================================
 
 load_dotenv()
 
 # ==========================================
-# 👇 CONFIGURATION (SECURE MODE) 👇
+# 👇 CONFIGURATION 👇
 # ==========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -24,8 +43,6 @@ BKASH_NUMBER = os.getenv("BKASH_NUMBER")
 
 BANNER_IMG = "https://cdn.pixabay.com/photo/2016/11/19/14/00/code-1839406_1280.jpg"
 
-# ==========================================
-
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # --- DATABASE CONNECTION ---
@@ -34,7 +51,7 @@ def get_db_connection():
         conn = psycopg2.connect(DB_URI)
         return conn
     except Exception as e:
-        print(f"DB Error: {e}")
+        print(f"❌ DB CONNECTION ERROR: {e}")
         return None
 
 # --- YOUTUBE API HELPERS ---
@@ -78,18 +95,14 @@ def get_main_menu_keyboard():
 # --- START & REGISTRATION ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    args = context.args
-    referrer_id = None
-    if args:
-        try:
-            referrer_id = int(args[0])
-            if referrer_id == user.id: referrer_id = None
-        except: pass
-
-    conn = get_db_connection()
-    if not conn: return
-    cur = conn.cursor()
     
+    # DB Check
+    conn = get_db_connection()
+    if not conn:
+        await update.message.reply_text("⚠️ **System Error:** Database not connected.")
+        return
+
+    cur = conn.cursor()
     cur.execute("SELECT is_banned FROM users WHERE user_id = %s", (user.id,))
     res = cur.fetchone()
     
@@ -99,7 +112,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("👋 **Welcome Back!**\nSelect an option from the menu.\n*মেইন মেনু থেকে কাজ শুরু করুন।*", reply_markup=get_main_menu_keyboard(), parse_mode='Markdown')
     else:
-        # 👇 আপডেটেড নাম এখানে 👇
+        args = context.args
+        referrer_id = None
+        if args:
+            try:
+                if int(args[0]) != user.id:
+                    referrer_id = int(args[0])
+            except: pass
+
         welcome_text = (
             f"🎉 **WELCOME TO YOUTUBE GROWTH PRO**\n"
             "━━━━━━━━━━━━━━━━━━\n"
@@ -121,6 +141,7 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user = update.effective_user
     
+    # 1. Menu Handling
     if text == "🚀 Earn Points": await earn_points_menu(update, context)
     elif text == "👤 My Profile": await show_profile(update, context)
     elif text == "🎁 Daily Bonus": await claim_daily_bonus(update, context)
@@ -134,10 +155,12 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📊 Server Stats": await show_server_stats(update, context)
     elif text == "🆘 Support": await update.message.reply_text("📞 **SUPPORT CENTER**\nContact Admin: @YourAdminUsername\n*যেকোনো সমস্যায় অ্যাডমিনকে মেসেজ দিন।*", parse_mode='Markdown')
     
+    # 2. Coupon Input
     elif context.user_data.get('waiting_for_coupon'):
         await process_coupon(update, context, text.strip())
         context.user_data['waiting_for_coupon'] = False
         
+    # 3. Registration (Channel ID)
     elif context.user_data.get('waiting_for_channel'):
         channel_id = text
         if "channel/" in text:
@@ -433,59 +456,102 @@ async def process_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE, cod
     else: await update.message.reply_text("❌ Invalid Code.")
     conn.close()
 
-# --- ADMIN COMMANDS ---
-async def admin_cmds(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- ADMIN COMMAND HANDLERS ---
+async def admin_add_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    cmd = update.message.text.split()[0]
-    args = context.args
+    try:
+        cid = context.args[0]
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO priority_channels (channel_id) VALUES (%s) ON CONFLICT DO NOTHING", (cid,))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"✅ Priority Added: {cid}")
+    except: await update.message.reply_text("Use: /add_priority <channel_id>")
+
+async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    msg = " ".join(context.args)
+    if not msg: return
     conn = get_db_connection()
     cur = conn.cursor()
-    try:
-        if cmd == "/add_priority":
-            cur.execute("INSERT INTO priority_channels VALUES (%s) ON CONFLICT DO NOTHING", (args[0],))
-            await update.message.reply_text("✅ Priority Added")
-        elif cmd == "/create_coupon":
-            cur.execute("INSERT INTO coupons VALUES (%s, %s, %s)", (args[0], int(args[1]), int(args[2])))
-            await update.message.reply_text("✅ Coupon Created")
-        elif cmd == "/add":
-            cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (int(args[1]), int(args[0])))
-            await update.message.reply_text("✅ Points Added")
-        elif cmd == "/broadcast":
-            msg = " ".join(args)
-            cur.execute("SELECT user_id FROM users")
-            for u in cur.fetchall():
-                try: await context.bot.send_message(u[0], f"📢 **NOTICE**\n{msg}", parse_mode='Markdown')
-                except: pass
-            await update.message.reply_text("✅ Broadcast Sent")
-        conn.commit()
-    except Exception as e: await update.message.reply_text(f"Error: {e}")
+    cur.execute("SELECT user_id FROM users")
+    users = cur.fetchall()
+    cur.close()
     conn.close()
+    count = 0
+    for u in users:
+        try:
+            await context.bot.send_message(u[0], f"📢 **NOTICE**\n━━━━━━━━━━━━━━━━━━\n{msg}", parse_mode='Markdown')
+            count += 1
+        except: pass
+    await update.message.reply_text(f"✅ Broadcast sent to {count} users.")
+
+async def admin_create_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    try:
+        code, amt, limit = context.args[0], int(context.args[1]), int(context.args[2])
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO coupons (code, amount, usage_limit) VALUES (%s, %s, %s)", (code, amt, limit))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"✅ Coupon Created: {code}")
+    except: await update.message.reply_text("Use: /create_coupon <CODE> <AMOUNT> <LIMIT>")
+
+async def admin_add_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    try:
+        uid, amt = int(context.args[0]), int(context.args[1])
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amt, uid))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"✅ Added {amt} points to {uid}")
+        await context.bot.send_message(uid, f"🎉 Admin added {amt} points!")
+    except: await update.message.reply_text("Use: /add <user_id> <amount>")
 
 async def user_transfer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        sender, target, amt = update.effective_user.id, int(context.args[0]), int(context.args[1])
-        if amt < 10: 
+        sender_id = update.effective_user.id
+        target_id = int(context.args[0])
+        amount = int(context.args[1])
+        if amount < 10: 
             await update.message.reply_text("❌ Minimum 10 Points.")
             return
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT balance FROM users WHERE user_id = %s", (sender,))
+        cur.execute("SELECT balance FROM users WHERE user_id = %s", (sender_id,))
         res = cur.fetchone()
-        if res and res[0] >= amt:
-            tax = int(amt * 0.1)
-            cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (amt, sender))
-            cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (amt-tax, target))
+        if res and res[0] >= amount:
+            tax = int(amount * 0.10)
+            final_amt = amount - tax
+            cur.execute("UPDATE users SET balance = balance - %s WHERE user_id = %s", (amount, sender_id))
+            cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (final_amt, target_id))
             cur.execute("UPDATE system_pool SET total_balance = total_balance + %s WHERE id = 1", (tax,))
             conn.commit()
-            await update.message.reply_text(f"✅ Sent {amt-tax} Pts to {target} (Tax: {tax})")
-        else: await update.message.reply_text("❌ Low Balance")
+            await update.message.reply_text(f"✅ **Sent!**\n{final_amt} Points sent to {target_id}.\nTax: {tax} Pts.")
+            try: await context.bot.send_message(target_id, f"💸 **Received!**\nYou got {final_amt} Points from a friend.")
+            except: pass
+        else:
+            await update.message.reply_text("❌ **Insufficient Balance!**")
+        cur.close()
         conn.close()
-    except: await update.message.reply_text("Use: /transfer ID AMOUNT")
+    except: await update.message.reply_text("Use: /transfer <ID> <Amount>")
 
+# --- MAIN RUN ---
 if __name__ == '__main__':
+    keep_alive() # Starts Flask Server
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # 1. Menu & Feature Commands
+    # 1. Admin Commands
+    app.add_handler(CommandHandler("add_priority", admin_add_priority))
+    app.add_handler(CommandHandler("broadcast", admin_broadcast))
+    app.add_handler(CommandHandler("create_coupon", admin_create_coupon))
+    app.add_handler(CommandHandler("add", admin_add_points))
+    
+    # 2. User Slash Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("earn", earn_points_menu))
     app.add_handler(CommandHandler("profile", show_profile))
@@ -496,16 +562,11 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("transfer", user_transfer))
     app.add_handler(CommandHandler("stats", show_server_stats))
     
-    # 2. Support
-    app.add_handler(CommandHandler("support", lambda u,c: u.message.reply_text("📞 Admin: @YourAdminUsername")))
-    
-    # 3. Admin Commands
-    for acmd in ["add_priority", "create_coupon", "add", "broadcast"]:
-        app.add_handler(CommandHandler(acmd.strip("/"), admin_cmds))
+    app.add_handler(CommandHandler("support", lambda u,c: u.message.reply_text("📞 **SUPPORT**\nAdmin: @YourAdminUsername", parse_mode='Markdown')))
 
-    # 4. Text & Button Handlers
+    # 3. Text & Button Handlers
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text_input))
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    print("YouTube Growth Pro is Live...")
+    print("YouTube Growth Pro is Live with Full Menu...")
     app.run_polling()
