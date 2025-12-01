@@ -2,19 +2,31 @@ import logging
 import asyncio
 import os
 import random
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from googleapiclient.discovery import build
 import psycopg2
 import requests
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
 
+# ==========================================
+# 👇 RENDER KEEPER 👇
+# ==========================================
+app = Flask('')
+@app.route('/')
+def home(): return "YouTube Growth Pro is Running..."
+def run(): app.run(host='0.0.0.0', port=8080)
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# ==========================================
+# 👇 CONFIGURATION 👇
+# ==========================================
 load_dotenv()
-
-# ==========================================
-# 👇 CONFIGURATION (SECURE MODE) 👇
-# ==========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
@@ -24,20 +36,14 @@ BKASH_NUMBER = os.getenv("BKASH_NUMBER")
 
 BANNER_IMG = "https://cdn.pixabay.com/photo/2016/11/19/14/00/code-1839406_1280.jpg"
 
-# ==========================================
-
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- DATABASE CONNECTION ---
+# --- DATABASE ---
 def get_db_connection():
-    try:
-        conn = psycopg2.connect(DB_URI)
-        return conn
-    except Exception as e:
-        print(f"DB Error: {e}")
-        return None
+    try: return psycopg2.connect(DB_URI)
+    except Exception as e: print(f"DB Error: {e}"); return None
 
-# --- YOUTUBE API HELPERS ---
+# --- API HELPERS ---
 def get_yt_channel_info(channel_id):
     try:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
@@ -51,9 +57,7 @@ def get_yt_channel_info(channel_id):
                 "subs": item["statistics"]["subscriberCount"]
             }
         return None
-    except Exception as e:
-        print(f"YT API Error: {e}")
-        return None
+    except: return None
 
 def check_subscription(user_channel_id, target_channel_id):
     try:
@@ -61,383 +65,441 @@ def check_subscription(user_channel_id, target_channel_id):
         req = youtube.subscriptions().list(part="snippet", channelId=user_channel_id, forChannelId=target_channel_id)
         res = req.execute()
         return len(res.get("items", [])) > 0
-    except:
-        return False
+    except: return False
 
-# --- KEYBOARDS (MENUS) ---
-def get_main_menu_keyboard():
+# --- KEYBOARDS ---
+def get_persistent_menu():
     keyboard = [
         [KeyboardButton("🚀 Earn Points"), KeyboardButton("👤 My Profile")],
         [KeyboardButton("🎁 Daily Bonus"), KeyboardButton("🏆 Leaderboard")],
         [KeyboardButton("💎 Buy Points"), KeyboardButton("🤝 Refer & Earn")],
-        [KeyboardButton("💸 Transfer"), KeyboardButton("🎟️ Redeem Code")],
-        [KeyboardButton("📊 Server Stats"), KeyboardButton("🆘 Support")]
+        [KeyboardButton("🎟️ Lottery (Win 1000)"), KeyboardButton("🚀 Boost Channel")],
+        [KeyboardButton("💸 Transfer"), KeyboardButton("🆘 Support")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- START & REGISTRATION ---
+def get_inline_home():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Start Earning", callback_data='earn_mode'), InlineKeyboardButton("👤 Dashboard", callback_data='profile_mode')],
+        [InlineKeyboardButton("💎 Premium Shop", callback_data='buy_mode'), InlineKeyboardButton("🎟️ Lottery", callback_data='lottery_info')],
+        [InlineKeyboardButton("🏆 Top 10", callback_data='top_mode'), InlineKeyboardButton("🎁 Bonus", callback_data='bonus_action')]
+    ])
+
+def get_profile_actions(is_enrolled):
+    enroll_text = "🔕 Unenroll" if is_enrolled else "📌 Enroll Channel"
+    enroll_data = "unenroll_action" if is_enrolled else "enroll_action"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎁 Claim Bonus", callback_data='bonus_action')],
+        [InlineKeyboardButton(enroll_text, callback_data=enroll_data), InlineKeyboardButton("🚀 Boost (200 Pts)", callback_data='boost_action')],
+        [InlineKeyboardButton("🔄 Transfer", callback_data='transfer_mode'), InlineKeyboardButton("🎟️ Coupon", callback_data='coupon_mode')],
+        [InlineKeyboardButton("🚀 Earn Points", callback_data='earn_mode')]
+    ])
+
+# --- HANDLERS ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    args = context.args
-    referrer_id = None
-    if args:
-        try:
-            referrer_id = int(args[0])
-            if referrer_id == user.id: referrer_id = None
-        except: pass
-
     conn = get_db_connection()
     if not conn: return
     cur = conn.cursor()
-    
     cur.execute("SELECT is_banned FROM users WHERE user_id = %s", (user.id,))
     res = cur.fetchone()
     
     if res:
-        if res[0]: 
-            await update.message.reply_text("⛔ **ACCOUNT BANNED**\nPlease contact admin.\n*আপনার অ্যাকাউন্টটি ব্যান করা হয়েছে।*")
-        else:
-            await update.message.reply_text("👋 **Welcome Back!**\nSelect an option from the menu.\n*মেইন মেনু থেকে কাজ শুরু করুন।*", reply_markup=get_main_menu_keyboard(), parse_mode='Markdown')
+        if res[0]: await update.message.reply_text("⛔ **BANNED!** Contact Admin.")
+        else: 
+            txt = f"👋 **Welcome Back, {user.first_name}!**\nSelect an option below."
+            await update.message.reply_photo(photo=BANNER_IMG, caption=txt, reply_markup=get_inline_home(), parse_mode='Markdown')
+            await update.message.reply_text("👇 **Main Menu:**", reply_markup=get_persistent_menu())
     else:
-        # 👇 আপডেটেড নাম এখানে 👇
+        args = context.args
+        ref_id = int(args[0]) if args and args[0].isdigit() and int(args[0]) != user.id else None
         welcome_text = (
             f"🎉 **WELCOME TO YOUTUBE GROWTH PRO**\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            f"Hello {user.first_name}, welcome to our premium community.\n"
+            f"Hello {user.first_name}, grow your channel organically.\n"
             f"*আমাদের প্রফেশনাল কমিউনিটিতে আপনাকে স্বাগতম।*\n\n"
-            "🎁 **Bonus:** `+75 Points`\n"
+            "🎁 **Bonus:** `+50 Points`\n"
             "🚀 **Features:** Real Subs, Fast Growth.\n\n"
             "👇 **Send your YouTube Channel ID:**\n"
             "(Example: `UCxxxxxxxxxxxxxxx`)"
         )
         await update.message.reply_photo(photo=BANNER_IMG, caption=welcome_text, parse_mode='Markdown')
         context.user_data['waiting_for_channel'] = True
-        if referrer_id: context.user_data['referrer_id'] = referrer_id
-    
+        if ref_id: context.user_data['referrer_id'] = ref_id
     cur.close()
     conn.close()
 
-async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user = update.effective_user
     
-    if text == "🚀 Earn Points": await earn_points_menu(update, context)
-    elif text == "👤 My Profile": await show_profile(update, context)
-    elif text == "🎁 Daily Bonus": await claim_daily_bonus(update, context)
-    elif text == "🏆 Leaderboard": await show_leaderboard(update, context)
-    elif text == "💎 Buy Points": await buy_points_info(update, context)
-    elif text == "🤝 Refer & Earn": await refer_info(update, context)
-    elif text == "💸 Transfer": await transfer_info(update, context)
+    if text == "🚀 Get Subscribers" or text == "🚀 Earn Points": await earn_points_logic(update, context)
+    elif text == "👤 My Profile": await show_profile_logic(update, context)
+    elif text == "🎁 Daily Bonus": await claim_bonus_logic(update, context)
+    elif text == "🏆 Leaderboard": await show_leaderboard_logic(update, context)
+    elif text == "💎 Buy Points": await buy_info_logic(update, context)
+    elif text == "🤝 Refer & Earn": await refer_logic(update, context)
+    elif text == "💸 Transfer": await update.message.reply_text("💸 **TRANSFER**\nUsage: `/transfer ID Amount`\n*Tax: 10%*")
     elif text == "🎟️ Redeem Code": 
-        await update.message.reply_text("🎟️ **REDEEM COUPON**\nEnter your coupon code below:\n*আপনার কুপন কোডটি নিচে লিখুন:*", parse_mode='Markdown')
-        context.user_data['waiting_for_coupon'] = True
-    elif text == "📊 Server Stats": await show_server_stats(update, context)
-    elif text == "🆘 Support": await update.message.reply_text("📞 **SUPPORT CENTER**\nContact Admin: @YourAdminUsername\n*যেকোনো সমস্যায় অ্যাডমিনকে মেসেজ দিন।*", parse_mode='Markdown')
-    
-    elif context.user_data.get('waiting_for_coupon'):
+        await update.message.reply_text("🎟️ **COUPON**\nEnter code:")
+        context.user_data['awaiting_coupon'] = True
+    elif text == "🎟️ Lottery (Win 1000)": await lottery_logic(update, context)
+    elif text == "🚀 Boost Channel": await boost_channel_logic(update, context)
+    elif text == "📊 Server Stats": await show_stats(update, context)
+    elif text == "🆘 Support": await update.message.reply_text("📞 Admin: @YourAdminUsername")
+
+    elif context.user_data.get('awaiting_coupon'):
         await process_coupon(update, context, text.strip())
-        context.user_data['waiting_for_coupon'] = False
-        
+        context.user_data['awaiting_coupon'] = False
+
     elif context.user_data.get('waiting_for_channel'):
-        channel_id = text
-        if "channel/" in text:
-            try: channel_id = text.split("channel/")[-1].split("/")[0].split("?")[0]
-            except: channel_id = text
-        
-        yt_info = get_yt_channel_info(channel_id)
-        if not yt_info:
-            await update.message.reply_text("❌ **Invalid Channel ID!**\nPlease send a valid public channel ID.\n*সঠিক আইডি দিন অথবা আপনার চ্যানেল পাবলিক আছে কি না দেখুন।*")
-            return
+        await process_registration(update, context, text)
 
-        conn = get_db_connection()
-        cur = conn.cursor()
-        try:
-            cur.execute("UPDATE system_pool SET total_balance = total_balance - 75 WHERE id = 1")
-            cur.execute(
-                "INSERT INTO users (user_id, username, channel_id, channel_title, pfp_url, balance, total_earned, referrer_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (user.id, user.username, channel_id, yt_info['title'], yt_info['thumbnail'], 75, 75, context.user_data.get('referrer_id'))
-            )
-            ref_id = context.user_data.get('referrer_id')
-            if ref_id:
-                cur.execute("UPDATE users SET balance = balance + 75, total_earned = total_earned + 75 WHERE user_id = %s", (ref_id,))
-                cur.execute("UPDATE system_pool SET total_balance = total_balance - 75 WHERE id = 1")
-                try: await context.bot.send_message(ref_id, "🎉 **Referral Bonus:** You got 75 Points!\n*বন্ধু জয়েন করায় ৭৫ পয়েন্ট পেয়েছেন!*")
-                except: pass
-            
-            conn.commit()
-            await update.message.reply_text("✅ **Registration Successful!**\n75 Points Added.\n*রেজিস্ট্রেশন সফল! ৭৫ পয়েন্ট যোগ হয়েছে।*", reply_markup=get_main_menu_keyboard(), parse_mode='Markdown')
-        except:
-            conn.rollback()
-            await update.message.reply_text("⚠️ **Already Registered!**\n*আপনি ইতিমধ্যে রেজিস্টার্ড।*")
-        finally:
-            cur.close()
-            conn.close()
-            context.user_data['waiting_for_channel'] = False
-
-# --- FEATURE FUNCTIONS ---
-
-async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def earn_points_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT balance, channel_id, warnings, total_earned, total_spent, gained_subs, channel_title, pfp_url FROM users WHERE user_id = %s", (user.id,))
+    
+    target, t_uid, priority = None, 0, False
+    
+    # 1. Admin Priority
+    cur.execute("SELECT channel_id FROM priority_channels")
+    for (pcid,) in cur.fetchall():
+        cur.execute("SELECT 1 FROM subscriptions WHERE subscriber_id=%s AND target_channel_id=%s", (user.id, pcid))
+        if not cur.fetchone():
+            cur.execute("SELECT 1 FROM skipped_tasks WHERE user_id=%s AND channel_id=%s", (user.id, pcid))
+            if not cur.fetchone():
+                cur.execute("SELECT channel_id FROM users WHERE user_id=%s", (user.id,))
+                my = cur.fetchone()
+                if not my or my[0] != pcid:
+                    target, priority = pcid, True
+                    break
+    
+    # 2. Boosted Channels (Paid 200)
+    if not target:
+        cur.execute("SELECT channel_id, user_id FROM boosted_channels WHERE expires_at > NOW() ORDER BY expires_at ASC")
+        for bcid, buid in cur.fetchall():
+            cur.execute("SELECT 1 FROM subscriptions WHERE subscriber_id=%s AND target_channel_id=%s", (user.id, bcid))
+            if not cur.fetchone():
+                cur.execute("SELECT 1 FROM skipped_tasks WHERE user_id=%s AND channel_id=%s", (user.id, bcid))
+                if not cur.fetchone():
+                    if buid != user.id:
+                        target, t_uid, priority = bcid, buid, True # Considered Priority
+                        break
+
+    # 3. Regular
+    if not target:
+        cur.execute("""SELECT user_id, channel_id FROM users 
+                       WHERE user_id != %s AND balance >= 15 AND is_enrolled = TRUE
+                       AND channel_id NOT IN (SELECT target_channel_id FROM subscriptions WHERE subscriber_id = %s)
+                       AND channel_id NOT IN (SELECT channel_id FROM skipped_tasks WHERE user_id = %s)
+                       ORDER BY RANDOM() LIMIT 1""", (user.id, user.id, user.id))
+        reg = cur.fetchone()
+        if reg: t_uid, target = reg
+
+    cur.close()
+    conn.close()
+
+    if target:
+        yt = get_yt_channel_info(target)
+        title = yt['title'] if yt else "Channel"
+        thumb = yt['thumbnail'] if yt else BANNER_IMG
+        context.user_data.update({'t_uid': t_uid, 't_cid': target, 'prio': priority})
+        
+        cap = (f"📋 **NEW TASK**\n━━━━━━━━━━━━━━━━\nSubscribe to earn **10 Points**.\n"
+               f"📺 **{title}**\n🎁 Reward: 10 Pts\n⚠️ *Don't unsubscribe (-30 Pts).*")
+        
+        kb = [[InlineKeyboardButton("📺 Subscribe Now ↗️", url=f"https://www.youtube.com/channel/{target}")],
+              [InlineKeyboardButton("✅ Verify", callback_data='verify')],
+              [InlineKeyboardButton("⏭️ Skip (-1)", callback_data='skip'), InlineKeyboardButton("🚩 Report", callback_data='report')]]
+        
+        if update.callback_query:
+            await update.callback_query.message.reply_photo(photo=thumb, caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        else:
+            await update.message.reply_photo(photo=thumb, caption=cap, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    else:
+        msg = "❌ **No Tasks!**\nPlease try again later."
+        if update.callback_query: await update.callback_query.message.reply_text(msg)
+        else: await update.message.reply_text(msg)
+
+async def show_profile_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT balance, channel_id, warnings, total_earned, total_spent, gained_subs, channel_title, pfp_url, streak_count, is_enrolled FROM users WHERE user_id = %s", (user.id,))
     res = cur.fetchone()
     cur.close()
     conn.close()
 
     if res:
-        balance, cid, warns, earned, spent, gained, c_title, pfp = res
-        yt_info = get_yt_channel_info(cid)
-        sub_count = yt_info['subs'] if yt_info else "N/A"
-        display_pfp = pfp if pfp else BANNER_IMG
+        bal, cid, warn, earn, spent, gained, title, pfp, streak, enrolled = res
+        yt = get_yt_channel_info(cid)
+        subs = yt['subs'] if yt else "N/A"
+        rank = "VIP" if spent > 2000 else "Free"
         
-        status = "✅ Active" if warns < 3 else "⚠️ At Risk"
-        membership = "VIP Member" if spent > 2000 else "Free Member"
+        cap = (f"👤 **MY DASHBOARD**\n━━━━━━━━━━━━━━━━\n📛 {title}\n🆔 `{user.id}` | 💎 {rank}\n━━━━━━━━━━━━━━━━\n"
+               f"📊 **STATS:** Live: `{subs}` | Bot: `{gained}`\n🔥 **Streak:** {streak} Days\n"
+               f"💰 **WALLET:** Bal: `{bal}` | Earned: `{earn}`\n"
+               f"⚠️ **Status:** Active ({warn}/3)")
         
-        caption = (
-            f"👤 **MY PROFILE**\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"📛 **Name:** {c_title}\n"
-            f"🆔 **ID:** `{user.id}`\n"
-            f"💎 **Rank:** {membership}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"📊 **STATISTICS**\n"
-            f"🔴 **Live Subs:** `{sub_count}`\n"
-            f"🚀 **Bot Gained:** `{gained}`\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"💰 **WALLET**\n"
-            f"💳 **Balance:** `{balance}` Pts\n"
-            f"📈 **Lifetime:** Earned `{earned}` | Spent `{spent}`\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ **Status:** {status} ({warns}/3)"
-        )
-        await update.message.reply_photo(photo=display_pfp, caption=caption, parse_mode='Markdown')
+        if update.callback_query:
+            await update.callback_query.message.reply_photo(photo=pfp or BANNER_IMG, caption=cap, reply_markup=get_profile_actions(enrolled), parse_mode='Markdown')
+        else:
+            await update.message.reply_photo(photo=pfp or BANNER_IMG, caption=cap, reply_markup=get_profile_actions(enrolled), parse_mode='Markdown')
 
-async def earn_points_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    conn = get_db_connection()
-    cur = conn.cursor()
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data, user = q.data, q.from_user
     
-    target_channel = None
-    target_uid = 0 # 0 = Priority/Admin Channel
-    is_priority = False
-
-    # 1. Check Priority Channels
-    cur.execute("SELECT channel_id FROM priority_channels ORDER BY added_at DESC")
-    priority_list = cur.fetchall()
+    if data == 'earn_mode': await earn_points_logic(update, context)
+    elif data == 'profile_mode': await show_profile_logic(update, context)
+    elif data == 'bonus_action': await claim_bonus_logic(update, context)
+    elif data == 'top_mode': await show_leaderboard_logic(update, context)
+    elif data == 'buy_mode': await buy_info_logic(update, context)
+    elif data == 'refer_mode': await refer_logic(update, context)
+    elif data == 'lottery_info': await lottery_logic(update, context)
+    elif data == 'boost_action': await boost_channel_logic(update, context)
     
-    for p_channel in priority_list:
-        pcid = p_channel[0]
-        cur.execute("SELECT 1 FROM subscriptions WHERE subscriber_id = %s AND target_channel_id = %s", (user.id, pcid))
-        is_subbed = cur.fetchone()
-        cur.execute("SELECT 1 FROM skipped_tasks WHERE user_id = %s AND channel_id = %s", (user.id, pcid))
-        is_skipped = cur.fetchone()
-        
-        cur.execute("SELECT channel_id FROM users WHERE user_id = %s", (user.id,))
-        my_cid_res = cur.fetchone()
-        my_cid = my_cid_res[0] if my_cid_res else ""
+    elif data == 'skip':
+        cid = context.user_data.get('t_cid')
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO skipped_tasks VALUES (%s, %s) ON CONFLICT DO NOTHING", (user.id, cid))
+        cur.execute("UPDATE users SET balance = balance - 1 WHERE user_id = %s", (user.id,))
+        conn.commit()
+        conn.close()
+        await q.message.delete()
+        await q.message.reply_text("⏭️ **Skipped!** 1 Point deducted.")
+        await earn_points_logic(update, context)
 
-        if not is_subbed and not is_skipped and pcid != my_cid:
-            target_channel = pcid
-            is_priority = True
-            break
-    
-    # 2. Check Regular Channels
-    if not target_channel:
-        cur.execute(
-            """
-            SELECT user_id, channel_id FROM users 
-            WHERE user_id != %s 
-            AND balance >= 15 
-            AND channel_id NOT IN (SELECT target_channel_id FROM subscriptions WHERE subscriber_id = %s)
-            AND channel_id NOT IN (SELECT channel_id FROM skipped_tasks WHERE user_id = %s)
-            ORDER BY RANDOM() LIMIT 1
-            """,
-            (user.id, user.id, user.id)
-        )
-        regular = cur.fetchone()
-        if regular:
-            target_uid, target_channel = regular
-
-    cur.close()
-    conn.close()
-
-    if target_channel:
-        yt_info = get_yt_channel_info(target_channel)
-        title = yt_info['title'] if yt_info else "YouTube Channel"
-        thumb = yt_info['thumbnail'] if yt_info else BANNER_IMG
-        
-        context.user_data['task_target_uid'] = target_uid
-        context.user_data['task_target_cid'] = target_channel
-        context.user_data['is_priority'] = is_priority
-
-        caption = (
-            f"📋 **NEW TASK AVAILABLE**\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"Subscribe to this channel to earn 10 Points.\n"
-            f"*পয়েন্ট পেতে নিচের চ্যানেলটি সাবস্ক্রাইব করুন।*\n\n"
-            f"📺 **Channel:** {title}\n"
-            f"🎁 **Reward:** 10 Points\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ *Note: Unsubscribing later will cost 30 Points.*"
-        )
-        kb = [
-            [InlineKeyboardButton("📺 Subscribe Now ↗️", url=f"https://www.youtube.com/channel/{target_channel}")],
-            [InlineKeyboardButton("✅ Verify & Claim", callback_data='verify_task')],
-            [InlineKeyboardButton("⏭️ Skip (-1 Pt)", callback_data='skip_task'), InlineKeyboardButton("🚩 Report", callback_data='report_task')]
-        ]
-        
-        await update.message.reply_photo(photo=thumb, caption=caption, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    else:
-        await update.message.reply_text("❌ **No Tasks Available!**\nPlease try again later.\n*বর্তমানে কোনো চ্যানেল পাওয়া যাচ্ছে না।*")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user = query.from_user
-
-    if data == 'skip_task':
-        cid = context.user_data.get('task_target_cid')
-        if cid:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute("INSERT INTO skipped_tasks (user_id, channel_id) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user.id, cid))
-            cur.execute("UPDATE users SET balance = balance - 1 WHERE user_id = %s", (user.id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-            await query.edit_message_caption("⏭️ **Task Skipped!** (1 Point deducted)")
-    
-    elif data == 'report_task':
-        cid = context.user_data.get('task_target_cid')
-        await context.bot.send_message(ADMIN_ID, f"🚨 **REPORT:**\nUser {user.id} reported Channel {cid}")
-        await query.edit_message_caption("🚩 **Reported!** Thanks for helping us.\n*রিপোর্ট করার জন্য ধন্যবাদ।*")
-
-    elif data == 'verify_task':
-        target_uid = context.user_data.get('task_target_uid')
-        target_cid = context.user_data.get('task_target_cid')
-        is_priority = context.user_data.get('is_priority')
-        
-        if not target_cid: return
-
+    elif data == 'verify':
+        uid, cid, prio = context.user_data.get('t_uid'), context.user_data.get('t_cid'), context.user_data.get('prio')
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT channel_id FROM users WHERE user_id = %s", (user.id,))
-        my_res = cur.fetchone()
-        if not my_res: return
-        my_cid = my_res[0]
-
-        is_subbed = check_subscription(my_cid, target_cid)
-
-        if is_subbed:
+        my = cur.fetchone()
+        
+        if my and check_subscription(my[0], cid):
             try:
-                # 1. Earner Gets 10
                 cur.execute("UPDATE users SET balance = balance + 10, total_earned = total_earned + 10 WHERE user_id = %s", (user.id,))
-                
-                # 2. Spender Loses 15 (Except Priority)
-                if not is_priority and target_uid != 0:
-                    cur.execute("UPDATE users SET balance = balance - 15, total_spent = total_spent + 15, gained_subs = gained_subs + 1 WHERE user_id = %s", (target_uid,))
-                    cur.execute("UPDATE system_pool SET total_balance = total_balance + 5 WHERE id = 1") 
-                
-                # 3. Log
-                cur.execute("INSERT INTO subscriptions (subscriber_id, target_channel_id, target_user_id) VALUES (%s, %s, %s)", (user.id, target_cid, target_uid))
-                
+                if not prio and uid != 0:
+                    cur.execute("UPDATE users SET balance = balance - 15, total_spent = total_spent + 15, gained_subs = gained_subs + 1 WHERE user_id = %s", (uid,))
+                    cur.execute("UPDATE system_pool SET total_balance = total_balance + 5 WHERE id = 1")
+                cur.execute("INSERT INTO subscriptions (subscriber_id, target_channel_id, target_user_id) VALUES (%s, %s, %s)", (user.id, cid, uid))
                 conn.commit()
-                await query.edit_message_caption("🎉 **Success!** 10 Points Added.")
-            except Exception as e:
-                conn.rollback()
-                print(e)
+                await q.message.delete()
+                await q.message.reply_text("🎉 **Success!** +10 Points.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Next Task", callback_data='earn_mode')]]))
+            except: 
+                await q.message.reply_text("⚠️ Error.")
         else:
-            await query.message.reply_text("❌ **Verification Failed!**\nDid you subscribe? Is your subscription list public?\n*সাবস্ক্রাইব করা হয়নি বা লিস্ট পাবলিক নয়।*")
+            await q.message.reply_text("❌ **Failed!** Not subscribed.")
+        conn.close()
+
+    elif data == 'buy_lottery_ticket':
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT balance FROM users WHERE user_id=%s", (user.id,))
+        bal = cur.fetchone()[0]
+        
+        if bal >= 100:
+            cur.execute("UPDATE users SET balance = balance - 100 WHERE user_id=%s", (user.id,))
+            cur.execute("INSERT INTO lottery_tickets (user_id) VALUES (%s)", (user.id,))
+            cur.execute("SELECT COUNT(DISTINCT user_id) FROM lottery_tickets")
+            count = cur.fetchone()[0]
+            
+            msg = f"🎟️ **Ticket Purchased!** (-100 Pts)\nTotal Participants: {count}/12"
+            
+            # LOTTERY DRAW LOGIC
+            if count >= 12:
+                cur.execute("SELECT user_id FROM lottery_tickets ORDER BY RANDOM() LIMIT 1")
+                winner = cur.fetchone()[0]
+                cur.execute("UPDATE users SET balance = balance + 1000 WHERE user_id=%s", (winner,))
+                cur.execute("DELETE FROM lottery_tickets") # Reset
+                cur.execute("UPDATE system_pool SET total_balance = total_balance + 200 WHERE id = 1") # System Profit
+                try: await context.bot.send_message(winner, "🎉 **CONGRATS!** You won the 1000 Pts Lottery!")
+                except: pass
+                msg += "\n🔥 **DRAW COMPLETED!** Winner selected."
+            
+            conn.commit()
+            await q.edit_message_text(msg)
+        else:
+            await q.answer("❌ Low Balance! Need 100 Pts.", show_alert=True)
+        conn.close()
+
+    elif data == 'confirm_boost':
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT balance, channel_id FROM users WHERE user_id=%s", (user.id,))
+        res = cur.fetchone()
+        
+        if res and res[0] >= 200:
+            exp = datetime.now() + timedelta(hours=1)
+            cur.execute("UPDATE users SET balance = balance - 200 WHERE user_id=%s", (user.id,))
+            cur.execute("INSERT INTO boosted_channels (channel_id, user_id, expires_at) VALUES (%s, %s, %s) ON CONFLICT (channel_id) DO UPDATE SET expires_at = %s", (res[1], user.id, exp, exp))
+            conn.commit()
+            await q.edit_message_text("🚀 **BOOSTED!**\nYour channel is #1 for 1 Hour.")
+        else:
+            await q.answer("❌ Low Balance! Need 200 Pts.", show_alert=True)
+        conn.close()
+
+    elif data in ['enroll_action', 'unenroll_action']:
+        new_status = True if data == 'enroll_action' else False
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET is_enrolled = %s WHERE user_id = %s", (new_status, user.id))
+        conn.commit()
+        conn.close()
+        state = "✅ Enrolled" if new_status else "🔕 Unenrolled"
+        await q.message.reply_text(f"{state} successfully!")
+        await show_profile_logic(update, context)
+
+# --- LOGIC HELPERS ---
+async def process_registration(update, context, channel_id):
+    user = update.effective_user
+    yt = get_yt_channel_info(channel_id.split('/')[-1])
+    
+    if not yt:
+        await update.message.reply_text("❌ **Invalid ID!** Public channel required.")
+        return
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE system_pool SET total_balance = total_balance - 50 WHERE id = 1")
+        cur.execute("INSERT INTO users (user_id, username, channel_id, channel_title, pfp_url, balance, total_earned, referrer_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (user.id, user.username, channel_id, yt['title'], yt['thumbnail'], 50, 50, context.user_data.get('referrer_id')))
+        
+        ref = context.user_data.get('referrer_id')
+        if ref:
+            cur.execute("UPDATE users SET balance = balance + 50, total_earned = total_earned + 50 WHERE user_id = %s", (ref,))
+            try: await context.bot.send_message(ref, "🎉 **Referral Bonus:** +50 Pts!")
+            except: pass
+        
+        conn.commit()
+        await update.message.reply_text("✅ **Registered!** +50 Points.", reply_markup=get_persistent_menu())
+    except:
+        conn.rollback()
+        await update.message.reply_text("⚠️ Already Registered.")
+    finally:
         cur.close()
         conn.close()
 
-# --- OTHER HANDLERS ---
-async def claim_daily_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def claim_bonus_logic(update, context):
     user = update.effective_user
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT daily_bonus_date FROM users WHERE user_id = %s", (user.id,))
+    
+    # Check if user did 3 tasks today
+    cur.execute("SELECT COUNT(*) FROM subscriptions WHERE subscriber_id=%s AND DATE(created_at) = CURRENT_DATE", (user.id,))
+    tasks_today = cur.fetchone()[0]
+    
+    if tasks_today < 3:
+        await update.message.reply_text(f"🔒 **Locked!**\nComplete 3 tasks today to unlock.\nDone: {tasks_today}/3")
+        conn.close()
+        return
+
+    cur.execute("SELECT daily_bonus_date, streak_count FROM users WHERE user_id = %s", (user.id,))
     res = cur.fetchone()
     today = date.today()
-    if res and res[0] == today:
-        await update.message.reply_text("⚠️ **Already Claimed!**\nCome back tomorrow.\n*আজকের বোনাস আপনি নিয়ে ফেলেছেন।*")
+    last, streak = res[0], res[1]
+    
+    if last == today:
+        msg = "⚠️ **Already Claimed!**"
     else:
-        bonus = 20
-        cur.execute("UPDATE users SET balance = balance + %s, total_earned = total_earned + %s, daily_bonus_date = %s WHERE user_id = %s", (bonus, bonus, today, user.id))
-        cur.execute("UPDATE system_pool SET total_balance = total_balance - %s WHERE id = 1", (bonus,))
+        if last == today - timedelta(days=1): streak += 1
+        else: streak = 1
+            
+        bonus = 15
+        extra = 50 if streak == 7 else 0
+        if streak > 7: streak = 1 # Reset after 7 days loop
+            
+        total = bonus + extra
+        cur.execute("UPDATE users SET balance = balance + %s, daily_bonus_date = %s, streak_count = %s WHERE user_id = %s", (total, today, streak, user.id))
         conn.commit()
-        await update.message.reply_text(f"🎁 **Daily Bonus!**\n{bonus} Points Added.\n*{bonus} পয়েন্ট যোগ হয়েছে।*")
-    cur.close()
+        msg = f"🎁 **Daily Bonus:** +{bonus} Pts\n🔥 **Streak:** {streak}/7"
+        if extra: msg += f"\n✨ **BIG BONUS:** +{extra} Pts!"
+        
     conn.close()
+    if update.callback_query: await update.callback_query.message.reply_text(msg)
+    else: await update.message.reply_text(msg)
 
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def lottery_logic(update, context):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(DISTINCT user_id) FROM lottery_tickets")
+    count = cur.fetchone()[0]
+    conn.close()
+    
+    msg = (f"🎟️ **LOTTERY (Win 1000 Pts)**\n━━━━━━━━━━━━━━━━\n"
+           f"💰 Ticket Cost: **100 Pts**\n👥 Participants: **{count}/12**\n"
+           f"⚡ Winner gets 1000 Pts instantly when 12 people join!")
+    
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎟️ Buy Ticket (-100)", callback_data='buy_lottery_ticket')]])
+    
+    if update.callback_query: await update.callback_query.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+    else: await update.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+
+async def boost_channel_logic(update, context):
+    msg = ("🚀 **BOOST CHANNEL**\n━━━━━━━━━━━━━━━━\n"
+           "Get #1 Priority for 1 Hour.\n"
+           "💰 **Cost:** 200 Points\n"
+           "⚡ *Effective immediately.*")
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("⚡ Confirm Boost (-200)", callback_data='confirm_boost')]])
+    if update.callback_query: await update.callback_query.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+    else: await update.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+
+async def show_leaderboard_logic(update, context):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT channel_title, total_earned FROM users ORDER BY total_earned DESC LIMIT 10")
-    leaders = cur.fetchall()
-    cur.close()
+    txt = "🏆 **TOP 10**\n" + "\n".join([f"{i+1}. {r[0]} - {r[1]}" for i, r in enumerate(cur.fetchall())])
     conn.close()
-    text = "🏆 **TOP 10 EARNERS**\n━━━━━━━━━━━━━━━━━━\n"
-    for idx, (name, score) in enumerate(leaders, 1):
-        medal = "🥇" if idx==1 else "🥈" if idx==2 else "🥉" if idx==3 else f"{idx}."
-        text += f"{medal} {name or 'Unknown'} - {score} Pts\n"
-    await update.message.reply_text(text, parse_mode='Markdown')
+    if update.callback_query: await update.callback_query.message.reply_text(txt)
+    else: await update.message.reply_text(txt)
 
-async def buy_points_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "💎 **PREMIUM STORE**\n"
-        "Buy points to grow faster:\n"
-        "*দ্রুত সাবস্ক্রাইবার পেতে পয়েন্ট কিনুন:*\n\n"
-        "📦 **Starter:** 100 Tk = 350 Points\n"
-        "📦 **Pro:** 500 Tk = 2000 Points\n"
-        "📦 **VIP:** 1000 Tk = 4500 Points\n\n"
-        f"💳 **bKash:** `{BKASH_NUMBER}`\n"
-        "Send money and send screenshot to Admin."
-    )
-    await update.message.reply_text(text, parse_mode='Markdown')
+async def buy_info_logic(update, context):
+    txt = f"💎 **BUY POINTS**\n100Tk = 350Pts\n500Tk = 2000Pts\n\nSend to `{BKASH_NUMBER}` & msg Admin."
+    if update.callback_query: await update.callback_query.message.reply_text(txt, parse_mode='Markdown')
+    else: await update.message.reply_text(txt, parse_mode='Markdown')
 
-async def transfer_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💸 **TRANSFER**\nUse command:\n`/transfer [User_ID] [Amount]`\n\nExample: `/transfer 12345 100`\nTax: 10%", parse_mode='Markdown')
-
-async def refer_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def refer_logic(update, context):
     link = f"https://t.me/{context.bot.username}?start={update.effective_user.id}"
-    await update.message.reply_text(f"🤝 **REFER & EARN**\n\n🔗 **Your Link:**\n`{link}`\n\n🎁 Bonus: Both get 75 Points!", parse_mode='Markdown')
+    txt = f"🤝 **INVITE**\n`{link}`\n🎁 Both get 50 Pts!"
+    if update.callback_query: await update.callback_query.message.reply_text(txt, parse_mode='Markdown')
+    else: await update.message.reply_text(txt, parse_mode='Markdown')
 
-async def show_server_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_stats(update, context):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*), SUM(balance) FROM users")
     res = cur.fetchone()
-    cur.close()
     conn.close()
-    await update.message.reply_text(f"📊 **STATS:** Users: {res[0]} | Points: {res[1]}")
+    await update.message.reply_text(f"📊 Users: {res[0]} | Points: {res[1]}")
 
-async def process_coupon(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
+async def process_coupon(update, context, code):
     user = update.effective_user
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT amount, usage_limit, used_count FROM coupons WHERE code = %s", (code,))
+    cur.execute("SELECT amount, usage_limit, used_count FROM coupons WHERE code=%s", (code,))
     c = cur.fetchone()
-    if c:
-        cur.execute("SELECT 1 FROM coupon_usage WHERE user_id = %s AND code = %s", (user.id, code))
-        if cur.fetchone(): await update.message.reply_text("⚠️ Used!")
-        elif c[2] >= c[1]: await update.message.reply_text("⚠️ Limit reached!")
-        else:
-            cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (c[0], user.id))
-            cur.execute("UPDATE coupons SET used_count = used_count + 1 WHERE code = %s", (code,))
+    if c and c[2] < c[1]:
+        cur.execute("SELECT 1 FROM coupon_usage WHERE user_id=%s AND code=%s", (user.id, code))
+        if not cur.fetchone():
+            cur.execute("UPDATE users SET balance=balance+%s WHERE user_id=%s", (c[0], user.id))
+            cur.execute("UPDATE coupons SET used_count=used_count+1 WHERE code=%s", (code,))
             cur.execute("INSERT INTO coupon_usage VALUES (%s, %s)", (user.id, code))
             conn.commit()
-            await update.message.reply_text(f"🎉 **Redeemed!** +{c[0]} Points.")
-    else: await update.message.reply_text("❌ Invalid Code.")
+            await update.message.reply_text(f"🎉 +{c[0]} Points!")
+        else: await update.message.reply_text("⚠️ Used!")
+    else: await update.message.reply_text("❌ Invalid/Expired.")
     conn.close()
 
 # --- ADMIN COMMANDS ---
 async def admin_cmds(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    cmd = update.message.text.split()[0]
-    args = context.args
+    cmd, args = update.message.text.split()[0], context.args
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -451,12 +513,11 @@ async def admin_cmds(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("UPDATE users SET balance = balance + %s WHERE user_id = %s", (int(args[1]), int(args[0])))
             await update.message.reply_text("✅ Points Added")
         elif cmd == "/broadcast":
-            msg = " ".join(args)
             cur.execute("SELECT user_id FROM users")
             for u in cur.fetchall():
-                try: await context.bot.send_message(u[0], f"📢 **NOTICE**\n{msg}", parse_mode='Markdown')
+                try: await context.bot.send_message(u[0], f"📢 **NOTICE**\n{' '.join(args)}", parse_mode='Markdown')
                 except: pass
-            await update.message.reply_text("✅ Broadcast Sent")
+            await update.message.reply_text("✅ Sent")
         conn.commit()
     except Exception as e: await update.message.reply_text(f"Error: {e}")
     conn.close()
@@ -464,9 +525,7 @@ async def admin_cmds(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def user_transfer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sender, target, amt = update.effective_user.id, int(context.args[0]), int(context.args[1])
-        if amt < 10: 
-            await update.message.reply_text("❌ Minimum 10 Points.")
-            return
+        if amt < 10: return
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT balance FROM users WHERE user_id = %s", (sender,))
@@ -482,30 +541,19 @@ async def user_transfer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
     except: await update.message.reply_text("Use: /transfer ID AMOUNT")
 
+# --- MAIN ---
 if __name__ == '__main__':
+    keep_alive()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # 1. Menu & Feature Commands
+    # Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("earn", earn_points_menu))
-    app.add_handler(CommandHandler("profile", show_profile))
-    app.add_handler(CommandHandler("bonus", claim_daily_bonus))
-    app.add_handler(CommandHandler("top", show_leaderboard))
-    app.add_handler(CommandHandler("buy", buy_points_info))
-    app.add_handler(CommandHandler("refer", refer_info))
     app.add_handler(CommandHandler("transfer", user_transfer))
-    app.add_handler(CommandHandler("stats", show_server_stats))
-    
-    # 2. Support
-    app.add_handler(CommandHandler("support", lambda u,c: u.message.reply_text("📞 Admin: @YourAdminUsername")))
-    
-    # 3. Admin Commands
-    for acmd in ["add_priority", "create_coupon", "add", "broadcast"]:
-        app.add_handler(CommandHandler(acmd.strip("/"), admin_cmds))
-
-    # 4. Text & Button Handlers
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text_input))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    for c in ["add_priority", "create_coupon", "add", "broadcast"]:
+        app.add_handler(CommandHandler(c.strip("/"), admin_cmds))
+        
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    app.add_handler(CallbackQueryHandler(callback_handler))
     
     print("YouTube Growth Pro is Live...")
     app.run_polling()
